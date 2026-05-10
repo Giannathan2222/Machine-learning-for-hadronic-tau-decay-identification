@@ -1,180 +1,113 @@
 import uproot
-import glob
 import numpy as np
 import awkward as ak
+import glob
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score, roc_curve
 import xgboost as xgb
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, roc_curve
-from sklearn.model_selection import train_test_split
 
-#########################################################
-# TRAINING THE HADRONIC TAU DECAY IDENTIFYING ALGORITHM # 
-#########################################################
+#####################################################
+####### LOAD ROOT FILES #############################
+#####################################################
 
 arrays = []
-proc_labels = []
-
-
-#load in every file to get a combination of fake and true taus
 
 directory = r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\MC"
 all_files = glob.glob(directory + "/*.root")
 
-#discovering all possible tau variables
-
-#only include variables that dont indirectly reveal tau identity
-valid_tau_vars = ["tau_pt", "tau_eta", "tau_phi", "tau_E", "tau_charge", "tau_nTracks"]
-features = valid_tau_vars + ["tau_truthMatched",
-         "lep_pt",
-         "lep_eta",
-         "lep_phi"] #include truth label which will be compared to on y axis
-
-
-#removing files not containing tau candidates
-def file_has_taus(filepath):
-    try:
-        arr = uproot.open(filepath)["mini"].arrays(["tau_pt"], library="ak")
-        return len(ak.flatten(arr["tau_pt"])) > 0
-    except:
-        return False
-    
-process_names = [
-    "ggH",
-    "Ztautau",
-    "Wmunu",
-    "Wtaunu",
-    "VBFH",
-    "Zee",
-    "WqqZll",
-    "singleTop",
-    "WplvWmqq",
-    "ttbar"
-]
-
-#merge files into awkward arrays and extract only selected features
+print("Loading ROOT files...")
 
 for f in all_files:
-    if not file_has_taus(f):
-        print(f"Skipping (no taus): {f}")
-        continue
+    try:
+        print("  Loading:", f)
+        tree = uproot.open(f)["mini"]
+        arr = tree.arrays([
+            "tau_pt", "tau_eta", "tau_phi", "tau_E",
+            "tau_charge", "tau_nTracks", "tau_truthMatched",
+            "lep_pt", "lep_eta", "lep_phi"
+        ], library="ak")
+        arrays.append(arr)
+    except Exception as e:
+        print("Skipping:", f, "because:", e)
 
-    print(f"Loading: {f}")
-    arr = uproot.open(f)["mini"].arrays(features, library="ak")
-    arrays.append(arr)
+print("Concatenating arrays...")
+arrays = ak.concatenate(arrays, axis=0)
 
-    # process label from filename: mc_XXXXXX.PROCNAME....
-    fname = f.split("\\")[-1]          # Windows path → take last part
-    pname = fname.split(".")[1].split("_")[0]      # e.g. "Ztautau_PTV0_70_CVetoBVeto"
-    n = len(ak.flatten(arr["tau_pt"]))
-    proc_labels.extend([pname] * n)
+#####################################################
+####### PREPARE TAU + LEPTON ARRAYS #################
+#####################################################
 
-############################
-#creating our own variables#
-############################
+tau_pt      = arrays["tau_pt"]
+tau_eta     = arrays["tau_eta"]
+tau_phi     = arrays["tau_phi"]
+tau_E       = arrays["tau_E"]
+tau_charge  = arrays["tau_charge"]
+tau_nTracks = arrays["tau_nTracks"]
+truth       = arrays["tau_truthMatched"]
 
-merged = ak.concatenate(arrays, axis=0)
-proc_labels = np.array(proc_labels)
+# Per-event lepton (first lepton or None)
+lep_pt_evt  = ak.firsts(arrays["lep_pt"])
+lep_eta_evt = ak.firsts(arrays["lep_eta"])
+lep_phi_evt = ak.firsts(arrays["lep_phi"])
 
+# Broadcast per-event lepton to each tau
+lep_pt_b,  _ = ak.broadcast_arrays(lep_pt_evt,  tau_pt)
+lep_eta_b, _ = ak.broadcast_arrays(lep_eta_evt, tau_eta)
+lep_phi_b, _ = ak.broadcast_arrays(lep_phi_evt, tau_phi)
 
-tau_pt     = ak.to_numpy(ak.flatten(merged["tau_pt"]))
-tau_eta    = ak.to_numpy(ak.flatten(merged["tau_eta"]))
-tau_phi    = ak.to_numpy(ak.flatten(merged["tau_phi"]))
-tau_E      = ak.to_numpy(ak.flatten(merged["tau_E"]))
-tau_charge = ak.to_numpy(ak.flatten(merged["tau_charge"]))
-tau_nTrk   = ak.to_numpy(ak.flatten(merged["tau_nTracks"]))
+#####################################################
+####### ENGINEERED VARIABLES ########################
+#####################################################
 
-# avoid division-by-zero issues
-tau_pt = np.where(tau_pt == 0, 1e-6, tau_pt)
-tau_E  = np.where(tau_E  == 0, 1e-6, tau_E)
+# ΔR(lep, tau)
+deta = tau_eta - lep_eta_b
+dphi = np.abs(tau_phi - lep_phi_b)
+dphi = ak.where(dphi > np.pi, 2*np.pi - dphi, dphi)
+dR = np.sqrt(deta**2 + dphi**2)
 
-# 1) log(pt)
-log_tau_pt = np.log(tau_pt)
+# log transforms
+log_pt = np.log(tau_pt + 1)
+log_E  = np.log(tau_E + 1)
 
-# 2) |eta|
-abs_tau_eta = np.abs(tau_eta)
+# E/pt
+E_over_pt = tau_E / (tau_pt + 1e-6)
 
-# 3) pt / E
-pt_over_E = tau_pt / tau_E
+#####################################################
+####### FLATTEN EVERYTHING ##########################
+#####################################################
 
-# 5 normalised track count
-nTrk_over_pt = tau_nTrk / tau_pt
+df = pd.DataFrame({
+    "tau_pt":      ak.to_numpy(ak.flatten(tau_pt)),
+    "tau_eta":     ak.to_numpy(ak.flatten(tau_eta)),
+    "tau_phi":     ak.to_numpy(ak.flatten(tau_phi)),
+    "tau_E":       ak.to_numpy(ak.flatten(tau_E)),
+    "tau_charge":  ak.to_numpy(ak.flatten(tau_charge)),
+    "tau_nTracks": ak.to_numpy(ak.flatten(tau_nTracks)),
 
-# 6) approximate tau mass from (E, pt, eta, phi)
-# treat tau as a massless 4-vector and reconstruct invariant mass of "cluster"
-# here we just use m^2 = E^2 - p^2 with p ≈ pt * cosh(eta)
-p = tau_pt * np.cosh(tau_eta)
-m2 = tau_E**2 - p**2
-tau_mass_approx = np.sqrt(np.clip(m2, 0, None))
+    "lep_pt":      ak.to_numpy(ak.flatten(lep_pt_b)),
+    "lep_eta":     ak.to_numpy(ak.flatten(lep_eta_b)),
+    "lep_phi":     ak.to_numpy(ak.flatten(lep_phi_b)),
 
-####################################
-# EVENT-LEVEL & ISOLATION FEATURES #
-####################################
+    "dR":          ak.to_numpy(ak.flatten(dR)),
+    "log_pt":      ak.to_numpy(ak.flatten(log_pt)),
+    "log_E":       ak.to_numpy(ak.flatten(log_E)),
+    "E_over_pt":   ak.to_numpy(ak.flatten(E_over_pt)),
 
-# number of taus in each event
-n_taus_event = ak.to_numpy(ak.num(merged["tau_pt"]))
-n_taus_event = np.repeat(n_taus_event, ak.num(merged["tau_pt"]))
+    "label":       ak.to_numpy(ak.flatten(truth))
+})
 
-# tau index inside the event (0 = leading tau)
-tau_index = ak.to_numpy(ak.flatten(ak.local_index(merged["tau_pt"])))
+# Remove NaNs
+df = df.replace([np.inf, -np.inf], np.nan).dropna()
 
-# sum of tau pt in the event
-sum_tau_pt = ak.sum(merged["tau_pt"], axis=1)
-sum_tau_pt = ak.to_numpy(sum_tau_pt)
-sum_tau_pt = np.repeat(sum_tau_pt, ak.num(merged["tau_pt"]))
+#####################################################
+####### TRAIN/TEST SPLIT ############################
+#####################################################
 
-# tau pt fraction of total tau pt in event
-tau_pt_fraction = tau_pt / sum_tau_pt
-
-# number of leptons in the event (isolation proxy)
-n_leps_event = ak.to_numpy(ak.num(merged["lep_pt"]))
-n_leps_event = np.repeat(n_leps_event, ak.num(merged["tau_pt"]))
-
-
-#build feature matrix X 
-
-X = np.column_stack([
-    tau_pt,
-    tau_eta,
-    tau_phi,
-    tau_E,
-    tau_charge,
-    tau_nTrk,
-    log_tau_pt,
-    abs_tau_eta,
-    pt_over_E,
-    nTrk_over_pt,
-    tau_mass_approx,
-    n_taus_event,
-    tau_index,
-    tau_pt_fraction,
-    n_leps_event,
-])
-
-#build label vector Y 
-
-y = ak.to_numpy(ak.flatten(merged["tau_truthMatched"])).astype(int) 
-#y = correcttau(1)(true) vs jet structure(0)(false) 
-
-print('X shape:', X.shape)
-print('y shape:', y.shape)
-
-
-#Clean the data (remove empty or infinite values)
-mask = np.isfinite(X).all(axis=1)
-X = X[mask]
-y = y[mask]
-
-#########################################################################################################
-
-#double check for my own sanity
-
-print(np.unique(y))
-vals, counts = np.unique(y, return_counts=True)
-print(list(zip(vals, counts))) #checks how unbalanced dataset is (real taus vs fakes)
-
-#########################################################################################################
-
-#Building our test model
+X = df.drop(columns=["label"])
+y = df["label"].astype(int)
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y,
@@ -183,86 +116,44 @@ X_train, X_test, y_train, y_test = train_test_split(
     stratify=y
 )
 
-dtrain = xgb.DMatrix(X_train, label=y_train)
-dtest  = xgb.DMatrix(X_test,  label=y_test)
+#####################################################
+####### SCALE FEATURES ##############################
+#####################################################
 
-params = {
-    "objective": "binary:logistic",
-    "eval_metric": "auc",
-    "eta": 0.05,
-    "max_depth": 5,
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
-    "tree_method": "hist"
-}
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
 
-#training our model
+#####################################################
+####### TRAIN XGBOOST ###############################
+#####################################################
 
-evals = [(dtrain, "train"), (dtest, "test")]
-
-model = xgb.train(
-    params,
-    dtrain,
-    num_boost_round= 250,
-    evals=evals,
-    early_stopping_rounds=30
+model = xgb.XGBClassifier(
+    n_estimators=600,
+    max_depth=6,
+    learning_rate=0.03,
+    subsample=0.9,
+    colsample_bytree=0.9,
+    eval_metric="logloss",
+    tree_method="hist"
 )
 
-#compute accuracy 
+model.fit(X_train, y_train)
 
+#####################################################
+####### EVALUATE ####################################
+#####################################################
 
-#########################################################
-#cross products to check that xgboost is consistent
-#build maks for other particle interactions
-#YOU WILL WANT TO EXPERIMENT WITH DIFFERENT "PROCESS NAMES" to see how results vary and which environment the xgboost peforms best in!
-train_mask = np.array(
-    [("Wtaunu" in p) or ("Wmunu" in p) for p in proc_labels]
-)
+y_prob = model.predict_proba(X_test)[:, 1]
+roc = roc_auc_score(y_test, y_prob)
 
-test_mask = np.array(
-    [("Ztautau" in p) or ("VBFH" in p) for p in proc_labels]
-)
-X_train_cross = X[train_mask]
-y_train_cross = y[train_mask]
+print(f"XGBoost ROC AUC: {roc:.3f}")
 
-X_test_cross = X[test_mask]
-y_test_cross = y[test_mask]
-
-dtrain_cross = xgb.DMatrix(X_train_cross, label=y_train_cross)
-dtest_cross  = xgb.DMatrix(X_test_cross,  label=y_test_cross)
-
-model_cross = xgb.train(params, dtrain_cross, num_boost_round=300)
-
-y_pred_cross = model_cross.predict(dtest_cross)
-auc_cross = roc_auc_score(y_test_cross, y_pred_cross)
-
-print("Cross-process AUC:", auc_cross)
-#########################################################
-
-#for training
-y_pred_train = model.predict(dtrain)
-
-train_auc = roc_auc_score(y_train, y_pred_train)
-print("Train AUC:", train_auc)
-
-#for test
-y_pred = model.predict(dtest)
-
-test_auc = roc_auc_score(y_test, y_pred)
-print("test AUC:", test_auc)
-
-#plot ROC curve
-
-fpr, tpr, _ = roc_curve(y_test, y_pred)
-
-plt.plot(fpr, tpr, label=f"AUC = {test_auc:.3f}")
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+plt.plot(fpr, tpr, label=f"ROC AUC = {roc:.3f}")
+plt.plot([0,1],[0,1],'k--')
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
+plt.title("XGBoost ROC Curve")
 plt.legend()
-plt.grid()
-plt.show()
-
-#which variables matter the most?
-
-xgb.plot_importance(model, max_num_features=20)
 plt.show()
