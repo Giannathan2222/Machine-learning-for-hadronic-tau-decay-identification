@@ -35,7 +35,8 @@ Decision tree
 
 Random Forest
 
-<img width="400" height="300" alt="XGB featimp" src="https://github.com/user-attachments/assets/be2fda07-5805-49d4-a9c5-879a6856025a" />
+<img width="400" height="300" alt="XGB featimp" src="https://github.com/user-attachments/assets/173c4946-c13a-49e1-9d41-5ebc42fb14e6" />
+
 
 XGBoost
 
