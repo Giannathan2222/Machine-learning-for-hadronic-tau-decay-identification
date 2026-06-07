@@ -144,6 +144,11 @@ plt.show()
 
 #feature importance#
 
+model.get_booster().feature_names = [
+    "tau_pt", "tau_eta", "tau_phi", "tau_E", "tau_charge", "tau_nTracks",
+    "lep_pt", "lep_eta", "lep_phi", "dR", "log_pt", "log_E", "E_over_pt"
+]
+
 xgb.plot_importance(model)
 plt.tight_layout()
 plt.show()
