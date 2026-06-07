@@ -8,7 +8,7 @@ from tqdm.keras import TqdmCallback
 
 arrays = []
 
-directory = r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\MC"
+directory = r"filepath"
 all_files = glob.glob(directory + "/*.root")
 
 print("Loading ROOT files...")
