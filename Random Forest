@@ -1,0 +1,150 @@
+import uproot
+import numpy as np
+import awkward as ak
+import glob
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+import pandas as pd
+
+####LOAD ROOT FILES####
+
+arrays = []
+
+directory = r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\MC"
+all_files = glob.glob(directory + "/*.root")
+
+print("Loading ROOT files...")
+
+for f in all_files:
+    print(f"Trying: {f}")
+    try:
+        # timeout prevents uproot from hanging forever
+        with uproot.open(f, timeout=5) as file:
+            if "mini" not in file:
+                print("  ERROR: 'mini' tree not found, skipping")
+                continue
+
+            print("  Loaded OK")
+            tree = file["mini"]
+
+            arr = tree.arrays([
+                "tau_pt", "tau_eta", "tau_phi", "tau_E",
+                "tau_charge", "tau_nTracks", "tau_truthMatched",
+                "lep_pt", "lep_eta", "lep_phi"
+            ], library="ak")
+
+            arrays.append(arr)
+
+    except Exception as e:
+        print(f"  Failed: {e}")
+
+# If nothing loaded, stop early
+if len(arrays) == 0:
+    raise RuntimeError("No ROOT files loaded successfully.")
+
+arrays = ak.concatenate(arrays, axis=0)
+
+###Tau + Lep Arrays###
+
+tau_pt      = arrays["tau_pt"]
+tau_eta     = arrays["tau_eta"]
+tau_phi     = arrays["tau_phi"]
+tau_E       = arrays["tau_E"]
+tau_charge  = arrays["tau_charge"]
+tau_nTracks = arrays["tau_nTracks"]
+truth       = arrays["tau_truthMatched"]
+
+# First lepton per event
+lep_pt_evt  = ak.firsts(arrays["lep_pt"])
+lep_eta_evt = ak.firsts(arrays["lep_eta"])
+lep_phi_evt = ak.firsts(arrays["lep_phi"])
+
+# Broadcast lepton to each tau
+lep_pt_b,  _ = ak.broadcast_arrays(lep_pt_evt,  tau_pt)
+lep_eta_b, _ = ak.broadcast_arrays(lep_eta_evt, tau_eta)
+lep_phi_b, _ = ak.broadcast_arrays(lep_phi_evt, tau_phi)
+
+###Engineered variables###
+
+# ΔR(lep, tau)
+deta = tau_eta - lep_eta_b
+dphi = np.abs(tau_phi - lep_phi_b)
+dphi = ak.where(dphi > np.pi, 2*np.pi - dphi, dphi)
+dR = np.sqrt(deta**2 + dphi**2)
+
+# log transforms
+log_pt = np.log(tau_pt + 1)
+log_E  = np.log(tau_E + 1)
+
+# E/pt
+E_over_pt = tau_E / (tau_pt + 1e-6)
+
+###FLATTEN###
+
+pt      = ak.to_numpy(ak.flatten(tau_pt))
+eta     = ak.to_numpy(ak.flatten(tau_eta))
+phi     = ak.to_numpy(ak.flatten(tau_phi))
+E       = ak.to_numpy(ak.flatten(tau_E))
+charge  = ak.to_numpy(ak.flatten(tau_charge))
+nTracks = ak.to_numpy(ak.flatten(tau_nTracks))
+truth_f = ak.to_numpy(ak.flatten(truth))
+
+lep_pt_f   = ak.to_numpy(ak.flatten(lep_pt_b))
+lep_eta_f  = ak.to_numpy(ak.flatten(lep_eta_b))
+lep_phi_f  = ak.to_numpy(ak.flatten(lep_phi_b))
+
+dR_f        = ak.to_numpy(ak.flatten(dR))
+log_pt_f    = ak.to_numpy(ak.flatten(log_pt))
+log_E_f     = ak.to_numpy(ak.flatten(log_E))
+E_over_pt_f = ak.to_numpy(ak.flatten(E_over_pt))
+
+#Feature Matrix (dataframe)
+
+X = pd.DataFrame({
+    "tau_pt": pt, "tau_eta": eta, "tau_phi": phi,
+    "tau_E": E, "tau_charge": charge, "tau_nTracks": nTracks,
+    "lep_pt": lep_pt_f, "lep_eta": lep_eta_f, "lep_phi": lep_phi_f,
+    "dR": dR_f, "log_pt": log_pt_f, "log_E": log_E_f, "E_over_pt": E_over_pt_f
+})
+
+y = truth_f.astype(int)
+
+#Train/Test Split#
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=42, stratify=y
+)
+
+model = RandomForestClassifier(
+    n_estimators=300,
+    max_depth=10,
+    n_jobs=-1
+)
+
+model.fit(X_train, y_train)
+
+#Evaluate
+
+tau_prob = model.predict_proba(X_test)[:, 1]
+fpr, tpr, _ = roc_curve(y_test, tau_prob)
+roc_auc = auc(fpr, tpr)
+
+print(f"Random Forest ROC AUC: {roc_auc:.3f}")
+
+plt.plot(fpr, tpr, label=f"ROC AUC = {roc_auc:.3f}")
+plt.plot([0,1],[0,1],'k--')
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Random Forest ROC Curve")
+plt.legend()
+plt.show()
+
+#feature matrix
+
+importances = pd.Series(model.feature_importances_, index=X.columns)
+importances.sort_values().plot(kind='barh', figsize=(8, 6))
+plt.title('Feature Importance')
+plt.show()
+
