@@ -9,9 +9,7 @@ from sklearn.metrics import roc_auc_score, roc_curve
 import xgboost as xgb
 import matplotlib.pyplot as plt
 
-#####################################################
-####### LOAD ROOT FILES #############################
-#####################################################
+#LOAD ROOT FILES#
 
 arrays = []
 
@@ -36,9 +34,7 @@ for f in all_files:
 print("Concatenating arrays...")
 arrays = ak.concatenate(arrays, axis=0)
 
-#####################################################
-####### PREPARE TAU + LEPTON ARRAYS #################
-#####################################################
+# PREPARE TAU + LEPTON ARRAYS #
 
 tau_pt      = arrays["tau_pt"]
 tau_eta     = arrays["tau_eta"]
@@ -58,9 +54,7 @@ lep_pt_b,  _ = ak.broadcast_arrays(lep_pt_evt,  tau_pt)
 lep_eta_b, _ = ak.broadcast_arrays(lep_eta_evt, tau_eta)
 lep_phi_b, _ = ak.broadcast_arrays(lep_phi_evt, tau_phi)
 
-#####################################################
-####### ENGINEERED VARIABLES ########################
-#####################################################
+###ENGINEERED FEATURES###
 
 # ΔR(lep, tau)
 deta = tau_eta - lep_eta_b
@@ -75,9 +69,7 @@ log_E  = np.log(tau_E + 1)
 # E/pt
 E_over_pt = tau_E / (tau_pt + 1e-6)
 
-#####################################################
-####### FLATTEN EVERYTHING ##########################
-#####################################################
+#FLATTEN#
 
 df = pd.DataFrame({
     "tau_pt":      ak.to_numpy(ak.flatten(tau_pt)),
@@ -102,9 +94,7 @@ df = pd.DataFrame({
 # Remove NaNs
 df = df.replace([np.inf, -np.inf], np.nan).dropna()
 
-#####################################################
-####### TRAIN/TEST SPLIT ############################
-#####################################################
+#TRAIN/TEST SPLIT#
 
 X = df.drop(columns=["label"])
 y = df["label"].astype(int)
@@ -116,17 +106,13 @@ X_train, X_test, y_train, y_test = train_test_split(
     stratify=y
 )
 
-#####################################################
-####### SCALE FEATURES ##############################
-#####################################################
+#SCALE FEATURES#
 
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
-#####################################################
-####### TRAIN XGBOOST ###############################
-#####################################################
+#TRAIN XGBOOST#
 
 model = xgb.XGBClassifier(
     n_estimators=600,
@@ -138,11 +124,9 @@ model = xgb.XGBClassifier(
     tree_method="hist"
 )
 
-model.fit(X_train, y_train)
+history = model.fit(X_train, y_train)
 
-#####################################################
-####### EVALUATE ####################################
-#####################################################
+#EVALUATE#
 
 y_prob = model.predict_proba(X_test)[:, 1]
 roc = roc_auc_score(y_test, y_prob)
@@ -157,3 +141,11 @@ plt.ylabel("True Positive Rate")
 plt.title("XGBoost ROC Curve")
 plt.legend()
 plt.show()
+
+#feature importance#
+
+xgb.plot_importance(model)
+plt.tight_layout()
+plt.show()
+
+
