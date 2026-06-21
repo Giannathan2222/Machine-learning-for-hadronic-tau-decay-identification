@@ -70,6 +70,19 @@ XGBoost
 
 ##### Professional ATLAS tau-identification algorithms utilise additional detector-response information, including calorimeter shower-shape and topocluster variables, which are not publicly available. Incorporating such information would likely improve classification performance significantly.
 
+## Real data validation (Post Iris extension)
+#### Due to real data lacking truth labels, ROC curves cannot be calculated. If we want to validate the model on real ATLAS data, we need to apply the trained network to detector data and compare the distribution of real-data output scores compared with distributions obtained for true and fake taus in simulation. If the simulation is modelling reality reasonably well, the real-data distribution should exhibit behaviour consistent with a mixture of the simulated signal and background distributions.
+
+<img width="600" height="450" alt="Neural network output mc vs data" src="https://github.com/user-attachments/assets/f56cb962-bdec-48d6-b97e-222dc5d9e40c" />
+
+#### The histogram shows that the real-data distribution lies between the simulated true-tau and fake-tau distributions. This is the expected behaviour, since real detector data contains a mixture of genuine hadronic tau decays and background processes. The presence of a smaller peak around a neural-network score of ~0.7, visible in both the real-data and simulated true-tau distributions, suggests that the classifier is identifying a population of tau-like candidates in real data similar to those seen in simulation. Overall, the agreement between the distributions indicates that the model behaves sensibly when applied to real detector data and that the Monte Carlo simulation provides a reasonable representation of the underlying physics.
+
+#### To study potential tau-identification working points, the fraction of candidates surviving above a given neural-network threshold was calculated for simulated true taus, simulated fake taus and real detector data. Increasing the threshold applies progressively stricter selection criteria, illustrating the trade-off between signal efficiency and background rejection.
+
+<img width="600" height="450" alt="Tau candidate acceptance vs threshold" src="https://github.com/user-attachments/assets/7c60e0a4-4c27-4e00-b668-c23e41a2bf7e" />
+
+#### The real-data distribution lies between the simulated signal and background distributions, consistent with the expectation that detector data contains a mixture of both processes.
+
 ## Extra Information
 #### Please note you require the https://opendata.cern.ch/record/15002 from CERN open data.
 
