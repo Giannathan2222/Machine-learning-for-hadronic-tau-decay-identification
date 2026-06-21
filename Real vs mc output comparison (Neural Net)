@@ -1,0 +1,295 @@
+import uproot
+import numpy as np
+import awkward as ak
+import glob
+import matplotlib.pyplot as plt
+
+from tensorflow.keras.models import load_model
+import joblib
+
+# LOAD TRAINED MODEL
+
+
+model = load_model(r"C:\Users\Gianluigi\Documents\tau_nn.keras")
+scaler = joblib.load(r"C:\Users\Gianluigi\Documents\Scaler.pkl")
+
+# FEATURE BUILDER
+
+def build_features(arrays):
+
+    tau_pt      = arrays["tau_pt"]
+    tau_eta     = arrays["tau_eta"]
+    tau_phi     = arrays["tau_phi"]
+    tau_E       = arrays["tau_E"]
+    tau_charge  = arrays["tau_charge"]
+    tau_nTracks = arrays["tau_nTracks"]
+
+    # first lepton per event
+    lep_pt_evt  = ak.firsts(arrays["lep_pt"])
+    lep_eta_evt = ak.firsts(arrays["lep_eta"])
+    lep_phi_evt = ak.firsts(arrays["lep_phi"])
+
+    # broadcast to tau candidates
+    lep_pt_b,  _ = ak.broadcast_arrays(lep_pt_evt,  tau_pt)
+    lep_eta_b, _ = ak.broadcast_arrays(lep_eta_evt, tau_eta)
+    lep_phi_b, _ = ak.broadcast_arrays(lep_phi_evt, tau_phi)
+
+    # engineered variables
+
+    deta = tau_eta - lep_eta_b
+
+    dphi = np.abs(tau_phi - lep_phi_b)
+    dphi = ak.where(dphi > np.pi,
+         2*np.pi - dphi,
+          dphi)
+
+    dR = np.sqrt(deta**2 + dphi**2)
+
+    log_pt = np.log(tau_pt + 1)
+    log_E  = np.log(tau_E + 1)
+
+    E_over_pt = tau_E / (tau_pt + 1e-6)
+
+    # flatten
+
+    pt      = ak.to_numpy(ak.flatten(tau_pt))
+    eta     = ak.to_numpy(ak.flatten(tau_eta))
+    phi     = ak.to_numpy(ak.flatten(tau_phi))
+    E       = ak.to_numpy(ak.flatten(tau_E))
+    charge  = ak.to_numpy(ak.flatten(tau_charge))
+    nTracks = ak.to_numpy(ak.flatten(tau_nTracks))
+
+    lep_pt_f  = ak.to_numpy(ak.flatten(lep_pt_b))
+    lep_eta_f = ak.to_numpy(ak.flatten(lep_eta_b))
+    lep_phi_f = ak.to_numpy(ak.flatten(lep_phi_b))
+
+    dR_f        = ak.to_numpy(ak.flatten(dR))
+    log_pt_f    = ak.to_numpy(ak.flatten(log_pt))
+    log_E_f     = ak.to_numpy(ak.flatten(log_E))
+    E_over_pt_f = ak.to_numpy(ak.flatten(E_over_pt))
+
+    X = np.column_stack([
+        pt, eta, phi, E,
+        charge, nTracks,
+        lep_pt_f, lep_eta_f, lep_phi_f,
+        dR_f,
+        log_pt_f,
+        log_E_f,
+        E_over_pt_f
+    ])
+
+    mask = np.isfinite(X).all(axis=1)
+
+    return X, mask
+
+
+# REAL DATA PREDICTION
+
+def run_data(directory):
+
+    arrays = []
+
+    files = glob.glob(directory + "/*.root")
+
+    for f in files:
+
+        print("Loading:", f)
+
+        tree = uproot.open(f)["mini"]
+
+        arr = tree.arrays([
+            "tau_pt",
+            "tau_eta",
+            "tau_phi",
+            "tau_E",
+            "tau_charge",
+            "tau_nTracks",
+            "lep_pt",
+            "lep_eta",
+            "lep_phi"
+        ], library="ak")
+
+        arrays.append(arr)
+
+    arrays = ak.concatenate(arrays, axis=0)
+
+    X, mask = build_features(arrays)
+
+    X = X[mask]
+
+    X_scaled = scaler.transform(X)
+
+    scores = model.predict(X_scaled).flatten()
+
+    return scores
+
+
+# MC PREDICTION
+
+def run_mc(directory):
+
+    arrays = []
+
+    files = glob.glob(directory + "/*.root")
+
+    for f in files:
+
+        print("Loading:", f)
+
+        tree = uproot.open(f)["mini"]
+
+        arr = tree.arrays([
+            "tau_pt",
+            "tau_eta",
+            "tau_phi",
+            "tau_E",
+            "tau_charge",
+            "tau_nTracks",
+            "tau_truthMatched",
+            "lep_pt",
+            "lep_eta",
+            "lep_phi"
+        ], library="ak")
+
+        arrays.append(arr)
+
+    arrays = ak.concatenate(arrays, axis=0)
+
+    X, mask = build_features(arrays)
+
+    truth = ak.to_numpy(
+        ak.flatten(arrays["tau_truthMatched"])
+    )
+
+    truth = truth[mask]
+
+    X = X[mask]
+
+    X_scaled = scaler.transform(X)
+
+    scores = model.predict(X_scaled).flatten()
+
+    return scores, truth
+
+
+# RUN MODEL
+
+
+mc_scores, mc_truth = run_mc(
+    r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\MC"
+)
+
+data_scores = run_data(
+    r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\Data"
+)
+
+
+# SPLIT MC
+
+
+mc_signal = mc_scores[mc_truth == 1]
+
+mc_background = mc_scores[mc_truth == 0]
+
+
+# SCORES
+
+
+print("MC signal candidates:", len(mc_signal))
+print("MC background candidates:", len(mc_background))
+print("Data candidates:", len(data_scores))
+
+print("MC signal mean:", mc_signal.mean())
+print("MC background mean:", mc_background.mean())
+print("Data mean:", data_scores.mean())
+
+threshold = 0.5
+
+print("MC signal > 0.5:",
+      np.mean(mc_signal > threshold))
+
+print("MC background > 0.5:",
+      np.mean(mc_background > threshold))
+
+print("Data > 0.5:",
+      np.mean(data_scores > threshold))
+      
+# HISTOGRAM
+
+
+plt.figure(figsize=(8,6))
+
+plt.hist(
+    mc_signal,
+    bins=50,
+    density=True,
+    histtype="step",
+    linewidth=2,
+    label="MC True Tau"
+)
+
+plt.hist(
+    mc_background,
+    bins=50,
+    density=True,
+    histtype="step",
+    linewidth=2,
+    label="MC Fake Tau"
+)
+
+plt.hist(
+    data_scores,
+    bins=50,
+    density=True,
+    histtype="step",
+    linewidth=2,
+    label="Real Data"
+)
+
+plt.xlabel("NN Tau Score")
+plt.ylabel("Normalized Candidates")
+plt.title("Neural Network Output: MC vs Data")
+plt.legend()
+
+plt.show()
+
+# TESTING DIFFERENT THRESHOLDS
+
+thresholds = np.linspace(0, 1, 100)
+
+sig_frac = []
+bkg_frac = []
+data_frac = []
+
+for t in thresholds:
+
+    sig_frac.append(
+        np.mean(mc_signal > t)
+    )
+
+    bkg_frac.append(
+        np.mean(mc_background > t)
+    )
+
+    data_frac.append(
+        np.mean(data_scores > t)
+    )
+
+plt.figure(figsize=(8,6))
+
+plt.plot(thresholds, sig_frac,
+         label="MC True Tau")
+
+plt.plot(thresholds, bkg_frac,
+         label="MC Fake Tau")
+
+plt.plot(thresholds, data_frac,
+         label="Real Data")
+
+plt.xlabel("NN Score Threshold")
+plt.ylabel("Fraction Above Threshold")
+plt.title("Tau Candidate Acceptance vs Threshold")
+plt.legend()
+
+plt.grid(True)
+plt.show()
