@@ -1,7 +1,7 @@
-# Hadronic Tau identification 
+# Hadronic Tau identification (ongoing)
 ### Comparing machine learning models for the identification of hadronically decaying tau leptons in ATLAS Open Data.
 
-This project was completed as part of the IRIS Big Data ATLAS Project 2026. The aim was to distinguish genuine hadronic tau decays from QCD jets and other background processes using publicly available Monte Carlo simulation data.
+This project was completed as part of the IRIS Big Data ATLAS Project 2026, but continued post conference. The aim was to distinguish genuine hadronic tau decays from QCD jets and other background processes using publicly available Monte Carlo simulation data.
 
 ##### ML models we will compare:
   * Decision Tree
