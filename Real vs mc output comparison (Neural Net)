@@ -10,8 +10,9 @@ import joblib
 # LOAD TRAINED MODEL
 
 
-model = load_model(r"C:\Users\Gianluigi\Documents\tau_nn.keras")
-scaler = joblib.load(r"C:\Users\Gianluigi\Documents\Scaler.pkl")
+model = load_model(r"model filepath")
+scaler = joblib.load(r"scaler filepath")
+#(note each filepath has been saved by whatever name you gave it on the neural network)
 
 # FEATURE BUILDER
 
@@ -176,11 +177,11 @@ def run_mc(directory):
 
 
 mc_scores, mc_truth = run_mc(
-    r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\MC"
+    r"Mc filepath"
 )
 
 data_scores = run_data(
-    r"C:\Users\Gianluigi\Documents\1lep1tau\1lep1tau\Data"
+    r"Data filepath"
 )
 
 
