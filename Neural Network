@@ -194,6 +194,12 @@ plt.title("ROC Curve on Monte Carlo Test Set")
 plt.legend()
 plt.show()
 
+model.save(r"your file name and location of choice")
+
+import joblib
+
+joblib.dump(scaler, r"file name and location")
+
 ##3D Loss surface##
 
 from mpl_toolkits.mplot3d import Axes3D
